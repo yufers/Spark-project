@@ -1,4 +1,15 @@
+x-spark-env: &spark-env
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+
+x-airflow-env: &airflow-env
+  AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+
 services:
+  # ==== MINIO ====
   minio:
     image: minio/minio:latest
     container_name: minio
@@ -18,14 +29,14 @@ services:
       timeout: 5s
       retries: 5
 
+  # ==== SPARK ====
   spark-master:
     image: apache/spark:3.5.0
     container_name: spark-master
     restart: always
     entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     environment:
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      <<: *spark-env
     ports:
       - "8080:8080"
       - "7077:7077"
@@ -41,12 +52,11 @@ services:
       - spark-master
     entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     environment:
-      - SPARK_WORKER_CORES=4
-      - SPARK_WORKER_MEMORY=4g
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - SPARK_PUBLIC_DNS=${SPARK_PUBLIC_IP}
-      - SPARK_WORKER_WEBUI_PORT=8081
+      SPARK_WORKER_CORES: 4
+      SPARK_WORKER_MEMORY: 4g
+      SPARK_PUBLIC_DNS: ${SPARK_PUBLIC_IP}
+      SPARK_WORKER_WEBUI_PORT: 8081
+      <<: *spark-env
     ports:
       - "8081:8081"
     volumes:
@@ -61,14 +71,92 @@ services:
       - spark-master
     entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     environment:
-      - SPARK_WORKER_CORES=4
-      - SPARK_WORKER_MEMORY=4g
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - SPARK_PUBLIC_DNS=${SPARK_PUBLIC_IP}
-      - SPARK_WORKER_WEBUI_PORT=8082
+      SPARK_WORKER_CORES: 4
+      SPARK_WORKER_MEMORY: 4g
+      SPARK_PUBLIC_DNS: ${SPARK_PUBLIC_IP}
+      SPARK_WORKER_WEBUI_PORT: 8082
+      <<: *spark-env
     ports:
       - "8082:8082"
     volumes:
       - ./spark_jobs:/opt/spark/spark_jobs
       - ./data:/opt/spark/data
+
+  # ==== AIRFLOW ====
+  postgres:
+    image:  postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    image: apache/airflow:3.0.3
+    container_name: airflow-init
+    restart: no
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME}
+      AIRFLOW_FIRSTNAME: ${AIRFLOW_FIRSTNAME}
+      AIRFLOW_LASTNAME: ${AIRFLOW_LASTNAME}
+      AIRFLOW_EMAIL: ${AIRFLOW_EMAIL}
+      AIRFLOW_ROLE: ${AIRFLOW_ROLE}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create
+      --username $AIRFLOW_USERNAME
+      --firstname $AIRFLOW_FIRSTNAME
+      --lastname $AIRFLOW_LASTNAME
+      --email $AIRFLOW_EMAIL
+      --role $AIRFLOW_ROLE
+      --password $AIRFLOW_ADMIN_PASSWORD"
+
+  airflow-api-server:
+    image: apache/airflow:3.0.3
+    container_name: airflow-api-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-env
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    command: api-server
+
+  airflow-scheduler:
+    image: apache/airflow:3.0.3
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *airflow-env
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    command: scheduler
