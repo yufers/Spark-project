@@ -197,3 +197,22 @@ services:
       - ./plugins:/opt/airflow/plugins
       - ./spark_jobs:/opt/airflow/spark_jobs:ro
     command: dag-processor
+
+  # ==== VALKEY ====
+  valkey:
+    image: valkey/valkey:latest
+    container_name: valkey
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/valkey:/data
+    command: valkey-server --requirepass ${VALKEY_PASSWORD} --appendonly yes
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a \"$$VALKEY_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
