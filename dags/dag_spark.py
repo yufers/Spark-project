@@ -4,16 +4,16 @@ from airflow.models.dag import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
 with DAG(
-    dag_id="first_job",
+    dag_id="dag_spark",
     start_date=pendulum.datetime(2026, 1, 1),
     schedule=None,
     catchup=False,
 ) as dag:
     run_spark_job = SparkSubmitOperator(
-        task_id="first_spark",
+        task_id="spark_task",
         conn_id="spark_default",
-        application="/opt/airflow/spark_jobs/first_job.py",
-        name="first_job",
+        application="/opt/airflow/spark_jobs/spark_job.py",
+        name="spark_job",
         num_executors=2,
         executor_cores=4,
         verbose=True,

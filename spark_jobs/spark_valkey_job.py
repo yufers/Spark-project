@@ -21,7 +21,7 @@ master = sentinel.master_for(
 master.hset("user:42", mapping={"country": "RU", "segment": "premium"})
 master.hset("user:17", mapping={"country": "KZ", "segment": "standard"})
 
-spark = SparkSession.builder.appName("SparkValkey").getOrCreate()
+spark = SparkSession.builder.appName("spark_valkey_job").getOrCreate()
 events_df = spark.createDataFrame(
     [
         (1, 42, 100.0),

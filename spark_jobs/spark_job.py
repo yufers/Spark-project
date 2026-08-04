@@ -9,7 +9,7 @@ PATH = "s3a://course-bucket/weather.parquet"
 logging.basicConfig(format="OUR_APP: %(message)s", level=logging.INFO)
 
 spark = SparkSession.builder \
-    .appName("first_job") \
+    .appName("spark_job") \
     .config("spark.hadoop.fs.s3a.access.key", os.environ["MINIO_ACCESS_KEY"]) \
     .config("spark.hadoop.fs.s3a.secret.key", os.environ["MINIO_SECRET_KEY"]) \
     .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \

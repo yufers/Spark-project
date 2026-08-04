@@ -4,16 +4,16 @@ from airflow.models.dag import DAG
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
 with DAG(
-    dag_id="valkey_spark_job",
+    dag_id="dag_spark_valkey",
     start_date=pendulum.datetime(2026, 1, 1),
     schedule=None,
     catchup=False,
 ) as dag:
     run_spark_job = SparkSubmitOperator(
-        task_id="run_spark_valkey",
-        application="/opt/airflow/spark_jobs/job_with_valkey.py",
+        task_id="spark_valkey_task",
+        application="/opt/airflow/spark_jobs/spark_valkey_job.py",
         conn_id="spark_default",
-        name="SparkValkey",
+        name="spark_valkey_job",
         num_executors=2,
         executor_cores=4,
         verbose=True,
