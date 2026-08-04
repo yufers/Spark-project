@@ -319,7 +319,7 @@ services:
 
   # ==== ICEBERG ====
   iceberg-rest:
-    image: apache/iceberg-rest-catalog:latest
+    image: tabulario/iceberg-rest:latest
     container_name: iceberg-rest
     restart: unless-stopped
     ports:
@@ -327,11 +327,12 @@ services:
     networks:
       - bigdata
     environment:
+      CATALOG_WAREHOUSE: "s3a://warehouse/"
+      CATALOG_IO__IMPL: "org.apache.iceberg.aws.s3.S3FileIO"
       CATALOG_S3_ENDPOINT: "http://minio:9000"
-      CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER}
-      CATALOG_S3_SECRET__ACCESS__KEY: ${MINIO_ROOT_PASSWORD}
+      CATALOG_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      CATALOG_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
-      CATALOG_TYPE: "memory"
     depends_on:
       minio:
         condition: service_healthy
