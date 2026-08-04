@@ -10,4 +10,4 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 USER airflow
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark \
-    pyspark==3.5.0
+    pyspark==3.5.1
