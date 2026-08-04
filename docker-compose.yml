@@ -317,6 +317,25 @@ services:
     environment:
       - VALKEY_PASSWORD=${VALKEY_PASSWORD}
 
+  # ==== ICEBERG ====
+  iceberg-rest:
+    image: apache/iceberg-rest-catalog:latest
+    container_name: iceberg-rest
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    networks:
+      - bigdata
+    environment:
+      CATALOG_S3_ENDPOINT: "http://minio:9000"
+      CATALOG_S3_ACCESS__KEY__ID: ${MINIO_ROOT_USER}
+      CATALOG_S3_SECRET__ACCESS__KEY: ${MINIO_ROOT_PASSWORD}
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      CATALOG_TYPE: "memory"
+    depends_on:
+      minio:
+        condition: service_healthy
+
 networks:
   bigdata:
     driver: bridge
