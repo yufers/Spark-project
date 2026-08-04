@@ -12,6 +12,8 @@ x-airflow-env: &airflow-env
   MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
   AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077?deploy_mode=client"
+  VALKEY_PASSWORD: ${VALKEY_PASSWORD}
+  VALKEY_NAME: ${VALKEY_NAME}
 
 services:
   # ==== MINIO ====
@@ -25,6 +27,8 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    networks:
+      - bigdata
     volumes:
       - ./data/minio:/data
     command: server /data --console-address ":9001"
@@ -36,7 +40,9 @@ services:
 
   # ==== SPARK ====
   spark-master:
-    image: apache/spark:3.5.0
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
     container_name: spark-master
     restart: always
     entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
@@ -45,12 +51,16 @@ services:
     ports:
       - "8080:8080"
       - "7077:7077"
+    networks:
+      - bigdata
     volumes:
       - ./spark_jobs:/opt/spark/spark_jobs
       - ./data:/opt/spark/data
 
   spark-worker-1:
-    image: apache/spark:3.5.0
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
     container_name: spark-worker-1
     restart: always
     depends_on:
@@ -64,12 +74,16 @@ services:
       <<: *spark-env
     ports:
       - "8081:8081"
+    networks:
+      - bigdata
     volumes:
       - ./spark_jobs:/opt/spark/spark_jobs
       - ./data:/opt/spark/data
 
   spark-worker-2:
-    image: apache/spark:3.5.0
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
     container_name: spark-worker-2
     restart: always
     depends_on:
@@ -83,6 +97,8 @@ services:
       <<: *spark-env
     ports:
       - "8082:8082"
+    networks:
+      - bigdata
     volumes:
       - ./spark_jobs:/opt/spark/spark_jobs
       - ./data:/opt/spark/data
@@ -92,6 +108,8 @@ services:
     image: postgres:16
     container_name: postgres
     restart: unless-stopped
+    networks:
+      - bigdata
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -111,6 +129,8 @@ services:
     container_name: airflow-init
     user: "${AIRFLOW_UID}:0"
     restart: "no"
+    networks:
+      - bigdata
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,6 +169,8 @@ services:
       <<: *airflow-env
     ports:
       - "8083:8080"
+    networks:
+      - bigdata
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
@@ -163,6 +185,8 @@ services:
     container_name: airflow-scheduler
     user: "${AIRFLOW_UID}:0"
     restart: unless-stopped
+    networks:
+      - bigdata
     depends_on:
       postgres:
         condition: service_healthy
@@ -184,6 +208,8 @@ services:
     container_name: airflow-dag-processor
     user: "${AIRFLOW_UID}:0"
     restart: unless-stopped
+    networks:
+      - bigdata
     depends_on:
       postgres:
         condition: service_healthy
@@ -198,21 +224,99 @@ services:
       - ./spark_jobs:/opt/airflow/spark_jobs:ro
     command: dag-processor
 
-  # ==== VALKEY ====
-  valkey:
+  # ==== VALKEY + SENTINEL ====
+  valkey-primary:
     image: valkey/valkey:latest
-    container_name: valkey
+    container_name: valkey-primary
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    networks:
+      - bigdata
+    command: >
+      valkey-server
+      --requirepass ${VALKEY_PASSWORD}
+      --masterauth ${VALKEY_PASSWORD}
+      --appendonly yes
     volumes:
-      - ./data/valkey:/data
-    command: valkey-server --requirepass ${VALKEY_PASSWORD} --appendonly yes
+      - ./data/valkey-primary:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -a $$VALKEY_PASSWORD ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     environment:
       - VALKEY_PASSWORD=${VALKEY_PASSWORD}
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli -a \"$$VALKEY_PASSWORD\" ping | grep PONG"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
+  valkey-replica:
+    image: valkey/valkey:latest
+    container_name: valkey-replica
+    restart: unless-stopped
+    networks:
+      - bigdata
+    depends_on:
+      valkey-primary:
+        condition: service_healthy
+    command: >
+      valkey-server
+      --requirepass ${VALKEY_PASSWORD}
+      --masterauth ${VALKEY_PASSWORD}
+      --replicaof valkey-primary 6379
+      --appendonly yes
+    volumes:
+      - ./data/valkey-replica:/data
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
+
+  valkey-sentinel-1:
+    image: valkey/valkey:latest
+    container_name: valkey-sentinel-1
+    restart: unless-stopped
+    depends_on:
+      - valkey-primary
+      - valkey-replica
+    ports:
+      - "26379:26379"
+    networks:
+      - bigdata
+    command: >
+      sh -c "printf 'port 26379\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster valkey-primary 6379 2\nsentinel auth-pass mymaster %s\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n' \"$$VALKEY_PASSWORD\" > /tmp/sentinel.conf
+      && valkey-sentinel /tmp/sentinel.conf"
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
+
+  valkey-sentinel-2:
+    image: valkey/valkey:latest
+    container_name: valkey-sentinel-2
+    restart: unless-stopped
+    depends_on:
+      - valkey-primary
+      - valkey-replica
+    ports:
+      - "26380:26379"
+    networks:
+      - bigdata
+    command: >
+      sh -c "printf 'port 26379\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster valkey-primary 6379 2\nsentinel auth-pass mymaster %s\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n' \"$$VALKEY_PASSWORD\" > /tmp/sentinel.conf
+      && valkey-sentinel /tmp/sentinel.conf"
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
+
+  valkey-sentinel-3:
+    image: valkey/valkey:latest
+    container_name: valkey-sentinel-3
+    restart: unless-stopped
+    depends_on:
+      - valkey-primary
+      - valkey-replica
+    ports:
+      - "26381:26379"
+    networks:
+      - bigdata
+    command: >
+      sh -c "printf 'port 26379\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel monitor mymaster valkey-primary 6379 2\nsentinel auth-pass mymaster %s\nsentinel down-after-milliseconds mymaster 5000\nsentinel failover-timeout mymaster 10000\nsentinel parallel-syncs mymaster 1\n' \"$$VALKEY_PASSWORD\" > /tmp/sentinel.conf
+      && valkey-sentinel /tmp/sentinel.conf"
+    environment:
+      - VALKEY_PASSWORD=${VALKEY_PASSWORD}
+
+networks:
+  bigdata:
+    driver: bridge
